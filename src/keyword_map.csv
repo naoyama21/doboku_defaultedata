@@ -1,0 +1,37 @@
+type,pattern,value
+# Category seeds (substring / regex sensible)
+category,土木一般世話役,労務
+category,普通作業員,労務
+category,特殊作業員,労務
+category,法面工,労務
+category,ブロック工,労務
+category,左官,労務
+category,鉄筋工,労務
+category,運転手,労務
+
+category,フィニッシャ,機械
+category,カッタ,機械
+category,クレーン,機械
+category,スプレッダ,機械
+category,レベラ,機械
+category,ジャンボ,機械
+category,ショベル,機械
+category,バックホウ,機械
+category,ローラ,機械
+category,運転,機械
+
+category,コンクリート,資材
+category,接着剤,資材
+category,鉄筋,資材
+category,鉄網,資材
+category,目地材,資材
+category,砕石,資材
+category,砂利,資材
+category,スペーサー,資材
+category,グースアスファルト,資材
+category,アスファルト,資材
+
+# Synonym seeds (optional; not yet used in code but reserved)
+synonym,覆工板|覆工板設置・撤去,覆工板
+synonym,ヒューム管,ヒューム管
+
