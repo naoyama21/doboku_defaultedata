@@ -67,9 +67,9 @@ if "error" in result:
     print(result["error"])
 else:
     # 1. 「表」のデータをCSVに出力
-    table_file = os.path.join(script_dir, "../data/table_data.csv")
+    table_file = os.path.join(script_dir, "../data/table_data_raw.csv")
     write_to_csv(table_file, result["表"])
     
     # 2. 「単価表」のデータをCSVに出力
-    unit_price_file = os.path.join(script_dir, "../data/unit_price_table_data.csv")
+    unit_price_file = os.path.join(script_dir, "../data/unit_price_table_data_raw.csv")
     write_to_csv(unit_price_file, result["単価表"])

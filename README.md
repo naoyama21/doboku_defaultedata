@@ -1,68 +1,98 @@
-(split_pfd.py: pdf をページごとに分割)
-(extract_tables.py: 1 つの Word ファイルから表を検出し tmp に表の csv を出力)
-(extract_tables_fromE.py: excel フォルダ内にあるファイルを csv に変換)
-extract_tables_fromW.py: word フォルダ内にあるファイルから表を抽出し、csv に変換
-modify_csv.py: カラム名から不要なスペースを削除など
-merge_tables.py: 各 csv のうち、フォーマットにあう表のみを結合。フォーマットに合わなかったものを出力
+## 概要
+道路工事のアイテム一覧（カテゴリ/サブカテゴリ/アイテム名）を、標準歩掛の単価表データに正規化・マッピングするためのスクリプト群です。
 
-### 現在の作業手順(やったこと)
+- 単価表の正規化: `src/preprocess_unit_price.py`
+- 正規化データから最終行構造を生成: `src/build_final_from_unit_price.py`
+- 道路工事アイテムとのマッチング: `bugakari/scripts/map_road_items_to_unit_prices.py`
 
-1. pdf を word に変換
-2. `extract_tables_fromW.py`で各表を csv に出力
-3. 出力 csv をパターンわけするために見たら、微修正で済むものが散見されたので手作業で修正。修正したものは manually_modified に移動(大体)。
-4. `modify_csv.py`で多少フォーマットを整える(スペース削除)
-5. `merge_tables.py`でフォーマットに合う表のみを結合。詳しい機能はプログラムの説明部分へ。
+## 前提
+- Python 3.10+ 推奨
+- 依存: `pandas`, `rapidfuzz`
 
-2 の修正パターンをいくつか示す。手作業でやってしまったが、modify_csv で対応できた部分も多い(結果論。そのパターンがどのくらいあるのかを把握するのに、同時に作業した方が早かった)
+```powershell
+python -m pip install -r ".\requirements.txt"
+```
 
-- 表名と作業名が 1 つになって表列に入り、作業列がない → 分割するだけ(どこで切るかの判定がプログラムを組もうとするとちょっと難あり)
-- セル内改行により異なるフォーマットに見える → 見えるだけなので何も問題はないが、確認作業を簡単にするため改行を削除。
-- 表名、作業名以外の項目は正しく取れていてこれらだけ欠けている →pdf を手動で参照して追加。csv ファイル名からページ番号とその表がページ内で何番目かわかる
-- 一切取得できていない表の追加 → 別の修正をしていたら偶然取得できていない表を見つけたのでファイルのみ追加。すべて取得できているかのチェックを行う必要がある(最終マージ後にチェックすることはおそらく容易)
-- カラム名が 2 行の扱いをされてしまっている(セル内改行とは別)→1 行に手動で結合。頑張ればプログラムも組めるけど、パターン漏れが出ないようにするのは難しそう。
-- 他の修正をしながら、備考列が備列と考列にわかれているものを若干発見 → 見たものは直したが、これは modify_csv.py に追加すべき機能。
+## データ配置（主要）
+- 原データ
+  - `bugakari/data/unit_price_table_data.csv`（単価表・生CSV）
+  - `bugakari/data/table_data.csv`（補助用・任意）
+  - `bugakari/data/道路工事.xlsx - Sheet1.csv`（道路工事アイテム）
+- 正規化出力
+  - `bugakari/data/normalized/unit_price_normalized.csv`
+  - `bugakari/data/normalized/table_data_aux.csv`
+- マッピング出力
+  - `bugakari/data/mappings/道路工事_unit_price_candidates.csv`
+  - `bugakari/data/mappings/道路工事_unmatched.csv`
 
-### extract_tables_fromW.py の説明
+## 単価表の正規化
+```powershell
+python ".\bugakari\src\preprocess_unit_price.py"
+```
+出力: `bugakari/data/normalized/unit_price_normalized.csv`
 
-- DOCX ファイルからテーブルを抽出し、それぞれのテーブルを DataFrame として返す
-- 「(注)」を含む行を見つけたら現在の表を終了。
-- 「表」または「別表」を含む行が見つかったら、以下のルールで新しい表の開始する。
-  1.  その「表」を含む行の次の次の行に「単位」という文字が含まれる場合：その「次の次の行」を新しい表の開始（ヘッダー）と判断し、「表」を含む行の次の行の文字列を「作業名」とする。
-  2.  上記以外の場合（「次の次の行」に「単位」が含まれない場合）：「表」を含む行の次の行を新しい表の開始（ヘッダー）と判断し、「作業名」は空。
-  3.  (注)表記を広い、まとめて最右列に追加す
+正規化の主な仕様:
+- カラム: `大分類名, 工種名, 細別名, 基本歩掛名, 所要日数作業単位_数量, 所要日数作業単位_単位, 歩掛作業単位_数量, 歩掛作業単位_単位, 名称, 規格, 単位, 数量, 摘要`
+- 区切りの厳密化: CSVのクォートを尊重（`csv.reader`）し、`1,000`などのカンマを誤分割しない
+- カテゴリ分割: 左端トークン＋スペースで（先頭トークン=大分類名、残り=工種名）。重複開始（例: `共通工 共通工 ...`）は右側を整理
+- 「単価表」の語は全テキスト列から除去（数字は保持）
+- `二重管工法 1,000mm以上2,000mm以下` などの細別名と、`1 本`などの作業単位（数量/単位）を抽出
 
-「表」「作業名」が存在しない場合は、列の追加を行わない
-出力先は、hyo または(以下詳しい説明は後日書きます)
+## 最終行構造の生成（任意）
+```powershell
+python ".\bugakari\src\build_final_from_unit_price.py"
+```
+出力: `bugakari/data/output/final_mapping.csv`
 
-### modify_csv.py の説明
+## 道路工事アイテムとのマッチング
+```powershell
+python ".\bugakari\scripts\map_road_items_to_unit_prices.py" ^
+  --road ".\bugakari\data\道路工事.xlsx - Sheet1.csv" ^
+  --unit ".\bugakari\data\normalized\unit_price_normalized.csv" ^
+  --outdir ".\bugakari\data\mappings" ^
+  --threshold 85 ^
+  --cat_filter borkind
+```
+PowerShell 1行版:
+```powershell
+python ".\bugakari\scripts\map_road_items_to_unit_prices.py" --road ".\bugakari\data\道路工事.xlsx - Sheet1.csv" --unit ".\bugakari\data\normalized\unit_price_normalized.csv" --outdir ".\bugakari\data\mappings" --threshold 85 --cat_filter borkind
+```
 
-- カラムと各セルに含まれる全角スペース、半角スペースの削除
-- 備考列が備列と考列に分割されているものを、考列が空なら結合
-- セル内改行の削除
-- (今後追加したい機能)「(1m3 当たり)」のような表記を手作業で追加した部分があり、全角半角や「あたり-当たり」の表記揺れがあるかもしれないので修正
+出力:
+- 候補: `道路工事_unit_price_candidates.csv`
+  - 列: 道路側（`カテゴリ名, サブカテゴリ名, アイテム名`）＋単価側（`大分類名, 工種名, 細別名, 名称, 規格, 単位, 数量, 摘要`）＋`match_on, match_score`
+- 未ヒット: `道路工事_unmatched.csv`
 
-### merge_tables.py の説明
+### フィルタモード（候補の絞り込み）
+- `--cat_filter both`: 単価側の`工種名`に「カテゴリ名」と「サブカテゴリ名」の両方を含む行のみ
+- `--cat_filter either`: 単価側の`工種名`にどちらか一方を含む行
+- `--cat_filter borkind`（推奨）: 単価側の`大分類名`に「カテゴリ名」を含む OR 単価側の`工種名`に「サブカテゴリ名」を含む行
 
-表列の要素が「表」から始まる場合と「別表」から始まる場合でマージ先を分けている。
+### 類似度判定
+- 「アイテム名」 vs 「細別名」「名称」を `rapidfuzz.fuzz.WRatio` で比較し、高い方を採用
+- `--threshold`（既定85）以上の候補のみ出力。候補を増やしたい場合は80や75に下げる
 
-1. 表列が存在しないものは Group3 に分類
-2. カラム名が前から順に、['表', '作業名', '名称', '摘要', '単位', '所要量','備考']に一致するものはマージ対象(注列の有無は問わない)として Group1 に分類
-3. 2 に該当しないもののうち、「所要量」列のみが別の要素である場合(「表,作業名,名称,摘要,単位,100t 吊,120t 吊,160t 吊,200t 吊,備考,注」、など)に単位と備考の間のカラム名を 1 つずつ作業名に結合し、縦に展開(どのような操作かは、data/tables_from_docx/hyo/4-2.csv(の表番号に対応する表 RA -2)が\data\tables_from_docx\combined_group1_main.csv でどのように展開されているかを確認するとわかります)。すると 2 と同じパターンになるので、Group1 に分類
-4. 3 で Group1 に分類されなかったもの(所要量列以外に問題がある)のうち、表列が「表」「別表」以外で始まるものを Group4 に分類(少なくとも表は確実におかしい)
-5. 4 で Group4 に分類されなかったもののうち、['名称', '摘要', '単位', '所要量','備考']のどれか 1 つが欠けているものを Group2 に分類(備考列を持たないものなどはある。前の判定で表列が存在することは約束されるが、作業名との分割ができていない可能性もある)
-6. いずれにもあてはまらないものを Group3 に分類
+### 上位候補の抽出（任意）
+```python
+import pandas as pd
+df = pd.read_csv(r".\bugakari\data\mappings\道路工事_unit_price_candidates.csv", dtype=str)
+df["match_score"] = df["match_score"].astype(int)
+top1 = (df.sort_values(["カテゴリ名","サブカテゴリ名","アイテム名","match_score"], ascending=[True,True,True,False])
+          .drop_duplicates(["カテゴリ名","サブカテゴリ名","アイテム名"]))
+top1.to_csv(r".\bugakari\data\mappings\道路工事_unit_price_top1.csv", index=False, encoding="utf-8")
+```
 
-現状、Group1(マージ済み)は表が 197、別表が 10 個あり、Group2 は 0、Group3 は 211、Group4 は 0 ファイルある。表として拾った 417 個のうち 207 個(49.6%)がマージできている。
+## よくある質問
+- 候補が少ない:
+  - `--threshold` を下げる（85→80/75）
+  - `--cat_filter borkind` を使う（ヒット範囲を広げる）
+- カテゴリ語尾のゆらぎ（例: `舗装工` vs `舗装`）で漏れる:
+  - `borkind` を使うか、語尾（「工/工事/工法」）除去の前処理を追加する
 
-マージできていない 211 ファイルのうち、直接見て歩掛に関係のない表と判断したものが 14 ファイルある。(data/tables_from_docx/other)
+## 補助スクリプトの概要
+- `extract_tables_fromW.py`: Word(DOCX)から表抽出→CSV
+- `modify_csv.py`: スペース/改行の整理、簡易パターンの整形
+- `merge_tables.py`: 取得済み表の自動マージ（所定パターンをGroup化して結合）
 
-また、表取得の時点で失敗しており、1 つの表が複数ファイルに分割されてしまっているものが多い。マージできていない表の大半は 100 ページ以降のおよそ 120 個ほどであると予想される。これは表取得では大体 160 ファイルほどに分割されている。
-残りの 40 ファイルほどは(211 4 60)、表の取得は正しいがカラム名が不一致なもの、カラム名の取得に失敗しているが大体の表の取得はできているものだとみられる。
-
-### メモ
-
-注がとれないのがなんでか不明、これはエクセル版から取ってきたらうまくいくのかもしれない
-
-想定する流れは、表番号が完全なマージを作成 → それとエクセル版を参照しながら注を入れる、くらい
-
-100 ページ目以降の表データについては、エクセルではおおよそ取得できているので使えそう
+## ライセンス
+本リポジトリ内のスクリプトは、特記なき場合MIT相当を想定（要調整）。業務データ（PDF/CSV等）の取扱いは社内規約に従ってください。
