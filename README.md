@@ -1,98 +1,91 @@
-## 概要
-道路工事のアイテム一覧（カテゴリ/サブカテゴリ/アイテム名）を、標準歩掛の単価表データに正規化・マッピングするためのスクリプト群です。
+## README
 
-- 単価表の正規化: `src/preprocess_unit_price.py`
-- 正規化データから最終行構造を生成: `src/build_final_from_unit_price.py`
-- 道路工事アイテムとのマッチング: `bugakari/scripts/map_road_items_to_unit_prices.py`
+### 概要
+- 歩掛・単価表の生データを整形→正規化→道路工事アイテムとファジー照合→最終CSV生成までを実行。
+- 流れ: PDF分割 → Geminiで表抽出 → 抽出CSV結合 → 分類 → クリーニング → 正規化（手直し可） → 照合 → 最終集計。
 
-## 前提
+### 前提・セットアップ
 - Python 3.10+ 推奨
-- 依存: `pandas`, `rapidfuzz`
-
+- 依存関係:
 ```powershell
-python -m pip install -r ".\requirements.txt"
+$ROOT = "c:\Users\Shimoyama Naoya\OneDrive\ドキュメント\kencopa\default data\bugakari"
+python -m pip install -r "$ROOT\requirements.txt"
+python -m pip install PyPDF2
 ```
 
-## データ配置（主要）
-- 原データ
-  - `bugakari/data/unit_price_table_data.csv`（単価表・生CSV）
-  - `bugakari/data/table_data.csv`（補助用・任意）
-  - `bugakari/data/道路工事.xlsx - Sheet1.csv`（道路工事アイテム）
-- 正規化出力
-  - `bugakari/data/normalized/unit_price_normalized.csv`
-  - `bugakari/data/normalized/table_data_aux.csv`
-- マッピング出力
-  - `bugakari/data/mappings/道路工事_unit_price_candidates.csv`
-  - `bugakari/data/mappings/道路工事_unmatched.csv`
-
-## 単価表の正規化
+### クイックスタート
+1) PDF分割（50～100ページ単位推奨）
 ```powershell
-python ".\bugakari\src\preprocess_unit_price.py"
+python "$ROOT\src\split_pdf.py"
 ```
-出力: `bugakari/data/normalized/unit_price_normalized.csv`
 
-正規化の主な仕様:
-- カラム: `大分類名, 工種名, 細別名, 基本歩掛名, 所要日数作業単位_数量, 所要日数作業単位_単位, 歩掛作業単位_数量, 歩掛作業単位_単位, 名称, 規格, 単位, 数量, 摘要`
-- 区切りの厳密化: CSVのクォートを尊重（`csv.reader`）し、`1,000`などのカンマを誤分割しない
-- カテゴリ分割: 左端トークン＋スペースで（先頭トークン=大分類名、残り=工種名）。重複開始（例: `共通工 共通工 ...`）は右側を整理
-- 「単価表」の語は全テキスト列から除去（数字は保持）
-- `二重管工法 1,000mm以上2,000mm以下` などの細別名と、`1 本`などの作業単位（数量/単位）を抽出
+2) Geminiで表抽出（CSV）
+- 出力要件（重要）:
+  - UTF-8 / カンマ区切り、各セルはダブルクォートで囲む
+  - 各レコードは2列以上、2列目に必ず表の見出し/タイトル（「単価表」を含むなら必ず残す）
+  - カンマ/改行はセル内クォートで保持
+- 例: `data\tmp\gemini_tables_chunk_0001.csv` などに保存
 
-## 最終行構造の生成（任意）
+3) 抽出CSVの結合 → 分類入力ファイル作成（中身はCSV形式）
 ```powershell
-python ".\bugakari\src\build_final_from_unit_price.py"
+$TMP = "$ROOT\data\tmp"
+$OUT = "$ROOT\data\第２編土木工事標準歩掛.txt"
+Get-ChildItem $TMP\gemini_tables_chunk_*.csv | Get-Content | Set-Content -Encoding UTF8 $OUT
 ```
-出力: `bugakari/data/output/final_mapping.csv`
 
-## 道路工事アイテムとのマッチング
+4) 表/単価表の分類（2列目に「単価表」を含むかで判定）
 ```powershell
-python ".\bugakari\scripts\map_road_items_to_unit_prices.py" ^
-  --road ".\bugakari\data\道路工事.xlsx - Sheet1.csv" ^
-  --unit ".\bugakari\data\normalized\unit_price_normalized.csv" ^
-  --outdir ".\bugakari\data\mappings" ^
-  --threshold 85 ^
-  --cat_filter borkind
+python "$ROOT\src\classify_data_from_file.py"
 ```
-PowerShell 1行版:
+- 出力: `data/table_data_raw.csv`, `data/unit_price_table_data_raw.csv`
+
+5) クリーニング（番号/丸数字/枝番/単価表(1) 等の除去・7列揃え）
 ```powershell
-python ".\bugakari\scripts\map_road_items_to_unit_prices.py" --road ".\bugakari\data\道路工事.xlsx - Sheet1.csv" --unit ".\bugakari\data\normalized\unit_price_normalized.csv" --outdir ".\bugakari\data\mappings" --threshold 85 --cat_filter borkind
+python "$ROOT\src\prepare_unit_price_from_raw.py"
+Copy-Item "$ROOT\data\unit_price_table_data_raw_cleaned.csv" "$ROOT\data\unit_price_table_data.csv" -Force
 ```
 
-出力:
-- 候補: `道路工事_unit_price_candidates.csv`
-  - 列: 道路側（`カテゴリ名, サブカテゴリ名, アイテム名`）＋単価側（`大分類名, 工種名, 細別名, 名称, 規格, 単位, 数量, 摘要`）＋`match_on, match_score`
-- 未ヒット: `道路工事_unmatched.csv`
-
-### フィルタモード（候補の絞り込み）
-- `--cat_filter both`: 単価側の`工種名`に「カテゴリ名」と「サブカテゴリ名」の両方を含む行のみ
-- `--cat_filter either`: 単価側の`工種名`にどちらか一方を含む行
-- `--cat_filter borkind`（推奨）: 単価側の`大分類名`に「カテゴリ名」を含む OR 単価側の`工種名`に「サブカテゴリ名」を含む行
-
-### 類似度判定
-- 「アイテム名」 vs 「細別名」「名称」を `rapidfuzz.fuzz.WRatio` で比較し、高い方を採用
-- `--threshold`（既定85）以上の候補のみ出力。候補を増やしたい場合は80や75に下げる
-
-### 上位候補の抽出（任意）
-```python
-import pandas as pd
-df = pd.read_csv(r".\bugakari\data\mappings\道路工事_unit_price_candidates.csv", dtype=str)
-df["match_score"] = df["match_score"].astype(int)
-top1 = (df.sort_values(["カテゴリ名","サブカテゴリ名","アイテム名","match_score"], ascending=[True,True,True,False])
-          .drop_duplicates(["カテゴリ名","サブカテゴリ名","アイテム名"]))
-top1.to_csv(r".\bugakari\data\mappings\道路工事_unit_price_top1.csv", index=False, encoding="utf-8")
+6) 正規化（照合用データ生成）
+```powershell
+python "$ROOT\src\preprocess_unit_price.py"
 ```
+- 出力: `data/normalized/unit_price_normalized.csv`
+- ここで一度、人手でおかしな箇所があれば修正（例: 大分類/工種の分割、細別名、単価表の取り残し、ヘッダ/計/機械運転の混入）
 
-## よくある質問
-- 候補が少ない:
-  - `--threshold` を下げる（85→80/75）
-  - `--cat_filter borkind` を使う（ヒット範囲を広げる）
-- カテゴリ語尾のゆらぎ（例: `舗装工` vs `舗装`）で漏れる:
-  - `borkind` を使うか、語尾（「工/工事/工法」）除去の前処理を追加する
+7) 照合（候補/未一致の作成）
+```powershell
+# either: 工種名が（カテゴリ or サブカテゴリ）のいずれかを含む
+python "$ROOT\src\map_road_items_to_unit_prices.py" --cat_filter either --threshold 85
 
-## 補助スクリプトの概要
-- `extract_tables_fromW.py`: Word(DOCX)から表抽出→CSV
-- `modify_csv.py`: スペース/改行の整理、簡易パターンの整形
-- `merge_tables.py`: 取得済み表の自動マージ（所定パターンをGroup化して結合）
+# borkind: 大分類名がカテゴリ or 工種名がサブカテゴリを含む
+python "$ROOT\src\map_road_items_to_unit_prices.py" --cat_filter borkind --threshold 80
+```
+- 出力: `data/mappings/道路工事_unit_price_candidates.csv`, `data/mappings/道路工事_unmatched.csv`
 
-## ライセンス
-本リポジトリ内のスクリプトは、特記なき場合MIT相当を想定（要調整）。業務データ（PDF/CSV等）の取扱いは社内規約に従ってください。
+8) 最終集計（任意）
+```powershell
+python "$ROOT\src\build_final_from_unit_price.py"
+```
+- 出力: `data/output/final_mapping.csv`
+
+### 最終CSVの列（最新仕様）
+- カテゴリ名, サブカテゴリ名, アイテム名
+- 所要日数作業単位_数量, 所要日数作業単位_単位
+- 基本所要日数名, 基本所要日数
+- 歩掛作業単位_数量, 歩掛作業単位_単位
+- 基本歩掛名, 歩掛カテゴリ
+- 項目名, 歩掛数量, 歩掛単位, 説明（= 摘要）
+
+### トラブルシューティング
+- パスは必ず二重引用符で囲む（空白/日本語対策）
+- 7列に揃っていない → クリーニング後に必ず `unit_price_table_data.csv` へコピー
+- 候補が少ない/多い → `--threshold` 調整、`--cat_filter` を `either`/`borkind` に変更
+- 「単価表」が残る → Gemini出力の「2列目＝見出し」要件と正規化時の置換を再確認
+
+### 9) 未照合の手当て（手作業）
+- 対象: `data/mappings/道路工事_unmatched.csv`
+- 方針:
+  - 単価側に該当がある場合: 正規化/抽出/フィルタ、`keyword_map.csv` を調整して 5→6→7 を再実行
+  - 単価側に該当が無い場合: 対応する歩掛を手作成し、最終CSVに反映
+    - 簡易対応: `data/output/final_mapping.csv` に同じ列構成で追記
+    - 推奨: `data/manual_overrides.csv`（最終列と同じカラム）を用意し、後で `build_final_from_unit_price.py` に取り込み処理を追加
