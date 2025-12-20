@@ -69,9 +69,10 @@ def build_final_df(unit_price_csv: str, table_data_csv: str, dict_csv: str) -> p
 
         final_rows.append(
             {
-                "大分類名": r.get("大分類名", ""),
-                "工種名": r.get("工種名", ""),
-                "細別名": r.get("細別名", ""),
+                # 置き換え: 大分類名/工種名/細別名 → カテゴリ名/サブカテゴリ名/アイテム名
+                "カテゴリ名": r.get("大分類名", ""),
+                "サブカテゴリ名": r.get("工種名", ""),
+                "アイテム名": r.get("細別名", ""),
                 "所要日数作業単位_数量": "",
                 "所要日数作業単位_単位": "",
                 "基本所要日数名": "",
@@ -83,15 +84,17 @@ def build_final_df(unit_price_csv: str, table_data_csv: str, dict_csv: str) -> p
                 "項目名": name,
                 "歩掛数量": qty,
                 "歩掛単位": unit_,
+                # 追加: 説明 ← 摘要
+                "説明": r.get("摘要", ""),
             }
         )
 
     final_df = pd.DataFrame(final_rows)
     # Column order as specified
     col_order = [
-        "大分類名",
-        "工種名",
-        "細別名",
+        "カテゴリ名",
+        "サブカテゴリ名",
+        "アイテム名",
         "所要日数作業単位_数量",
         "所要日数作業単位_単位",
         "基本所要日数名",
@@ -103,6 +106,7 @@ def build_final_df(unit_price_csv: str, table_data_csv: str, dict_csv: str) -> p
         "項目名",
         "歩掛数量",
         "歩掛単位",
+        "説明",
     ]
     final_df = final_df[col_order]
     return final_df
